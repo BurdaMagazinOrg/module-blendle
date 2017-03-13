@@ -5,13 +5,14 @@
  * Contains blendle.module..
  */
 
-use \Drupal\Core\Form\FormStateInterface;
-use \Drupal\node\NodeTypeInterface;
-use \Drupal\Core\Entity\EntityInterface;
-use \Drupal\Core\Entity\Display\EntityViewDisplayInterface;
-use \Drupal\Core\Database\Database;
-use \Drupal\Core\Site\Settings;
-use \Drupal\Component\Utility\Random;
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\node\NodeTypeInterface;
+use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+use Drupal\Core\Database\Database;
+use Drupal\Core\Site\Settings;
+use Drupal\Component\Utility\Random;
+use Drupal\Core\Url;
 
 /**
  * Implements hook_libraries_info().
@@ -375,13 +376,13 @@ function _blendle_initialize() {
 
   // If any of these settings are missing, we bail out.
   if (empty($provider_uid) || empty($public_key) || empty($api_secret)) {
-    \Drupal::logger('blendle')->error('Blendle is missing some settings. Go to the <a href=!admin-page>Blendle settings page</a> to correct this.', array('!admin-page' => url('admin/config/system/blendle')));
+    \Drupal::logger('blendle')->error('Blendle is missing some settings. Go to the <a href=!admin-page>Blendle settings page</a> to correct this.', array('!admin-page' => Url::fromRoute('blendle.admin_settings_form')->toString()));
     return FALSE;
   }
 
   // Require the SDK.
-  $library = libraries_load('blendle-button');
-  if (empty($library['loaded'])) {
+  $sdk_loaded = class_exists('\BlendleButton\Client') || ($library = libraries_load('blendle-button') && !empty($library['loaded']));
+  if (!$sdk_loaded) {
     \Drupal::logger('blendle')->error('The Blendle SDK could not be loaded. Please check your installation.');
     return FALSE;
   }
