@@ -1,0 +1,135 @@
+<?php
+
+use \Drupal\Core\Site\Settings;
+use \Drupal\Core\Url;
+use Drupal\node\Entity\NodeType;
+
+/**
+ * Implements hook_requirements().
+ */
+function blendle_requirements($phase) {
+  $requirements = array();
+  $config = Drupal::config('blendle.settings');
+
+  if ($phase == 'runtime') {
+    $messages = array();
+
+    $libraries = libraries_get_libraries();
+    if (!isset($libraries['pay-with-blendle'])) {
+      $messages[] = t('Please install the Blendle SDK. See README.txt for more information.');
+    }
+
+    $api_secret = Settings::get('blendle_api_secret', NULL);
+    if (empty($api_secret)) {
+      $messages[] = t('Please setup your Blendle API secret in settings.php.');
+    }
+
+    $settings_page_url = Url::fromRoute('blendle.admin_settings_form');
+
+    $provider_uid = $config->get('provider_uid');
+    if (empty($provider_uid)) {
+      $messages[] = t('Please setup your Blendle Provider UID on the <a href="!settings-page-url">settings page</a>.',
+        array(
+          '!settings-page-url' => base_path() . $settings_page_url->getInternalPath(),
+        )
+      );
+    }
+
+    $public_key = $config->get('public_key');
+    if (empty($public_key)) {
+      $messages[] = t(
+        'Please setup your Blendle Public key on the <a href="!settings-page-url">settings page</a>.',
+        array(
+          '!settings-page-url' => base_path() . $settings_page_url->getInternalPath(),
+        )
+      );
+    }
+
+    if (!empty($messages)) {
+      if (count($messages) > 1) {
+        $errors = [
+          '#theme' => 'item_list',
+          '#items' => $messages,
+        ];
+      }
+      else {
+        $errors = reset($messages);
+      }
+
+      $requirements['blendle_configuration'] = array(
+        'title' => t('Blendle Installation'),
+        'value' => t('Incomplete'),
+        'description' => $errors,
+        'severity' => REQUIREMENT_ERROR,
+      );
+    }
+  }
+
+  return $requirements;
+}
+
+/**
+ * Implements hook_schema().
+ */
+function blendle_schema() {
+  return array(
+    'blendle' => array(
+      'description' => 'The main table to hold the Blendle data.',
+      'fields' => array(
+        'bid' => array(
+          'description' => 'The primary identifier.',
+          'type' => 'serial',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+        ),
+        'entity_type' => array(
+          'description' => 'The entity type this data is attached to.',
+          'type' => 'varchar',
+          'length' => 128,
+          'not null' => TRUE,
+          'default' => '',
+        ),
+        'entity_id' => array(
+          'description' => 'The entity id this data is attached to.',
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+        ),
+        'status' => array(
+          'description' => 'Whether the Blendle Pay Button is turned on or off.',
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+        'word_count' => array(
+          'description' => 'The amount of words for this node.',
+          'type' => 'int',
+          'unsigned' => TRUE,
+          'not null' => TRUE,
+          'default' => 0,
+        ),
+      ),
+      'indexes' => array(
+        'entity_id' => array('entity_id'),
+        'blendle_status' => array('status'),
+      ),
+      'primary key' => array('bid'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function blendle_uninstall() {
+  $config = \Drupal::config('blendle.settings');
+  $config->delete();
+
+  $types = NodeType::loadMultiple();
+
+  foreach ($types as $type) {
+    $type->unsetThirdPartySetting('blendle', 'blendle_enabled');
+    $type->unsetThirdPartySetting('blendle', 'blendle_default_status');
+  }
+}

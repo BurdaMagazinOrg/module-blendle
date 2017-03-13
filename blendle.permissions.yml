@@ -1,0 +1,9 @@
+administer blendle:
+  title: 'Administer Blendle'
+  restrict access: TRUE
+
+set blendle status:
+  title: 'Set Blendle Status on nodes'
+
+read articles without blendle:
+  title: 'Read articles without using Blendle'

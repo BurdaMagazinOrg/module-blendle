@@ -1,0 +1,7 @@
+blendle.admin_settings_form:
+  title: 'Blendle Button Configuration'
+  route_name: blendle.admin_settings_form
+  description: 'Blendle Button'
+  parent: system.admin_config_system
+  weight: 99
+

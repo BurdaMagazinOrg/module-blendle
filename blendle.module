@@ -1,0 +1,517 @@
+<?php
+
+/**
+ * @file
+ * Contains blendle.module..
+ */
+
+use \Drupal\Core\Form\FormStateInterface;
+use \Drupal\node\NodeTypeInterface;
+use \Drupal\Core\Entity\EntityInterface;
+use \Drupal\Core\Entity\Display\EntityViewDisplayInterface;
+use \Drupal\Core\Database\Database;
+use \Drupal\Core\Site\Settings;
+use \Drupal\Component\Utility\Random;
+
+/**
+ * Implements hook_libraries_info().
+ */
+function blendle_libraries_info() {
+  $libraries['blendle-button'] = array(
+    'name' => 'Blendle Button',
+    'vendor url' => 'http://pay-docs.blendle.io/',
+    'download url' => 'https://assets.blendle.com/blendle-button/sdk/php/blendle-button-sdk.zip',
+    'version callback' => '_blendle_short_circuit_version',
+    'files' => array(
+      'php' => array('src/BlendleButton/client.php', 'vendor/autoload.php'),
+    ),
+  );
+
+  return $libraries;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function blendle_form_node_type_form_alter(&$form, FormStateInterface $form_state) {
+  /** @var \Drupal\node\NodeTypeInterface $type */
+  $type = $form_state->getFormObject()->getEntity();
+
+  $form['blendle'] = array(
+    '#type' => 'details',
+    '#title' => t('Blendle'),
+    '#weight' => 35,
+    '#group' => 'additional_settings',
+  );
+  $form['blendle']['#attached']['library'][] = 'blendle/blendle-admin';
+
+  $form['blendle']['blendle_button'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Blendle Button'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
+
+  $form['blendle']['blendle_button']['blendle_enable_node'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Enable'),
+    '#description' => t(
+      'Allow the Blendle Button to be placed on content items of this type.'
+    ),
+    '#default_value' => $type->getThirdPartySetting(
+      'blendle',
+      'blendle_enabled',
+      0
+    ),
+  );
+
+  $form['blendle']['blendle_button']['blendle_default_status_node'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Default state'),
+    '#description' => t(
+      'Default state for the Blendle Button on new posts of this type.'
+    ),
+    '#default_value' => $type->getThirdPartySetting(
+      'blendle',
+      'blendle_default_status',
+      0
+    ),
+    '#states' => array(
+      'visible' => array(
+        ':input[name="blendle_enable_node"]' => array('checked' => TRUE),
+      ),
+    ),
+  );
+
+  $form['#entity_builders'][] = 'blendle_form_node_type_form_builder';
+}
+
+function blendle_form_node_type_form_builder($entity_type, NodeTypeInterface $type, &$form, FormStateInterface $form_state) {
+  $type->setThirdPartySetting(
+    'blendle',
+    'blendle_enabled',
+    $form_state->getValue('blendle_enable_node')
+  );
+  $type->setThirdPartySetting(
+    'blendle',
+    'blendle_default_status',
+    $form_state->getValue('blendle_default_status_node')
+  );
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function blendle_form_node_form_alter(&$form, FormStateInterface &$form_state, $form_id) {
+  if (\Drupal::currentUser()->hasPermission('set blendle status')) {
+    /** @var \Drupal\node\NodeTypeInterface $node */
+    $node = $form_state->getFormObject()->getEntity();
+
+    $node_type = \Drupal\node\Entity\NodeType::load($node->getType());
+
+    $blendle_enabled = $node_type->getThirdPartySetting(
+      'blendle',
+      'blendle_enabled',
+      0
+    );
+    $blendle_default_status = $node_type->getThirdPartySetting(
+      'blendle',
+      'blendle_default_status',
+      0
+    );
+
+    if ($blendle_enabled == 1) {
+      if (isset($node->nid->value) && $node->nid->value > 0) {
+        // Load the value from the node if we are viewing an existing node.
+        $defaults = new StdClass();
+
+        $defaults->status = _blendle_get_status($node);
+      }
+      else {
+        // Initialise standard values.
+        $defaults = new StdClass();
+        $defaults->status = $blendle_default_status;
+      }
+
+      $form['blendle_settings'] = array(
+        '#type' => 'details',
+        '#title' => t('Blendle Button'),
+        '#group' => 'advanced',
+        '#attributes' => array(
+          'class' => array('node-form-blendle'),
+        ),
+        '#weight' => 100,
+      );
+
+      $form['blendle_settings']['blendle_status'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Enable Blendle Button'),
+        '#default_value' => isset($defaults->status) && $defaults->status ? TRUE : FALSE,
+        '#description' => t(
+          'Check this box to enable the Blendle Button for this content item.'
+        ),
+      );
+    }
+  }
+
+  foreach (array_keys($form['actions']) as $action) {
+    if ($action != 'preview' && isset($form['actions'][$action]['#type']) && $form['actions'][$action]['#type'] === 'submit') {
+      $form['actions'][$action]['#submit'][] = 'blendle_form_node_form_submit';
+    }
+  }
+}
+
+function blendle_form_node_form_submit($form, FormStateInterface $form_state) {
+  $node = $form_state->getFormObject()->getEntity();
+
+  if ($form_state->getValue('blendle_status') == 1) {
+    $word_count = _blendle_count_words($node);
+
+    $keys = array(
+      'entity_type' => $node->getType(),
+      'entity_id' => $node->nid->value,
+    );
+    $insert_fields = array(
+      'entity_type' => $node->getType(),
+      'entity_id' => $node->nid->value,
+      'status' => $form_state->getValue('blendle_status'),
+      'word_count' => $word_count,
+    );
+
+    $update_fields = array(
+      'status' => $form_state->getValue('blendle_status'),
+      'word_count' => $word_count,
+    );
+
+    \Drupal::database()->merge('blendle')
+      ->key($keys)
+      ->insertFields($insert_fields)
+      ->updateFields($update_fields)
+      ->execute();
+  }
+  else {
+    Database::getConnection('default')->delete('blendle')
+      ->condition('entity_type', $node->getType())
+      ->condition('entity_id', $node->nid->value)
+      ->execute();
+  }
+}
+
+/**
+ * Implements hook_entity_load().
+ */
+function blendle_entity_load(array $entities, $entity_type_id) {
+  $entity_ids = array_keys($entities);
+  $result = Database::getConnection('default')->query(
+    "SELECT entity_id, status, word_count FROM {blendle} WHERE entity_id IN (:ids[])",
+    array(':ids[]' => $entity_ids)
+  );
+
+  foreach ($result as $record) {
+    $id = $record->entity_id;
+    $entities[$id]->blendle_status = $record->status;
+    $entities[$id]->word_count = $record->word_count;
+  }
+}
+
+function blendle_preprocess_node(&$variables) {
+  $entity = $variables['elements']['#node'];
+  $view_mode = $variables['elements']['#view_mode'];
+  $route_match = \Drupal::routeMatch();
+  $variables['elements']['#cache']['max-age'] = 0;
+  $variables['attributes']['id'] = new Drupal\Core\Template\AttributeString('id', 'node-' . $entity->nid->value);
+
+  if (is_a($entity, 'Drupal\node\NodeInterface')) {
+    if ($view_mode == 'full' && !empty($entity->blendle_status) && node_is_page(
+        $entity
+      ) && !($route_match->getRouteName() == 'entity.node.edit_form')
+    ) {
+      $pay_sdk = _blendle_get_sdk();
+
+      // If Blendle didn't initialize, we bail out.
+      if (empty($pay_sdk)) {
+        return;
+      }
+
+      // Fetch token from header.
+      $token = isset($_SERVER['HTTP_X_PWB_TOKEN']) ? $_SERVER['HTTP_X_PWB_TOKEN'] : FALSE;
+
+      // If token is set and the acquired item matches the current item
+      // then show the full content.
+      if (!empty($token) && $pay_sdk->isItemAcquired($entity->nid->value, $token)) {
+        // The user has access, so we bail out.
+        // This is basically the version of the page that Blendle will fetch.
+        // Blendles JS will replace the content with this version when you have
+        // access.
+        return;
+      }
+      else {
+        foreach ($variables['content'] as $field_name => $content) {
+          if (method_exists($entity->{$field_name}, 'view')) {
+            $variables['content'][$field_name] = $entity->{$field_name}->view('teaser');
+            $variables['content'][$field_name]['#cache']['max-age'] = 0;
+          }
+        }
+
+        $variables['content']['js'] = [
+          '#type' => 'html_tag',
+          '#tag' => 'div',
+          '#value' => '',
+          '#weight' => 99,
+        ];
+        // Add library.
+        $variables['content']['js']['#attached']['library'][] = 'blendle/blendle.paysdk';
+        $variables['content']['blendle_button'] = _blendle_generate_button_markup($entity);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_entity_view().
+ */
+function blendle_entity_view(array &$build, EntityInterface $entity, EntityViewDisplayInterface $display, $view_mode) {
+  $route_match = \Drupal::routeMatch();
+
+  $build['#cache']['max-age'] = 0;
+  if (is_a($entity, 'Drupal\node\NodeInterface')) {
+    if ($view_mode == 'full' && !empty($entity->blendle_status) && node_is_page(
+        $entity
+      ) && !($route_match->getRouteName() == 'entity.node.edit_form')
+    ) {
+      // Set the max age to 0 to prevent the dynamic page cache from taking over.
+      $pay_sdk = _blendle_get_sdk();
+
+      // If Blendle didn't initialize, we bail out.
+      if (empty($pay_sdk)) {
+        return;
+      }
+
+      // Never show the Blendle button for:
+      // - the node author
+      // - users with the read articles without blendle permission
+      // - users who can edit the node.
+      $user = \Drupal::currentUser();
+      $e_user = $entity->getCurrentUserId();
+      $is_node_author = $e_user[0] > 0 && $e_user[0] == $user->id();
+
+      $has_permission = $user->hasPermission('read articles without blendle');
+      $may_edit = $entity->access('update');
+
+      if ($is_node_author || $has_permission || $may_edit) {
+        // Don't display the message if only $has_permission is TRUE.
+        if (!($has_permission && !$is_node_author && !$may_edit)) {
+          drupal_set_message('The Blendle Button is enabled for this item.');
+        }
+        return;
+      }
+
+      // Fetch token from header.
+      $token = isset($_SERVER['HTTP_X_PWB_TOKEN']) ? $_SERVER['HTTP_X_PWB_TOKEN'] : FALSE;
+
+      // If token is set and the acquired item matches the current item
+      // then show the full content.
+      $build['body']['#attributes']['id'] = 'node-' . $entity->nid->value;
+
+      if (!empty($token) && $pay_sdk->isItemAcquired($entity->nid->value, $token)) {
+        // The user has access, so we bail out.
+        // This is basically the version of the page that Blendle will fetch.
+        // Blendles JS will replace the content with this version when you have
+        // access.
+        return;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_library_info_build().
+ */
+function blendle_library_info_build() {
+  $libraries = [];
+  $pay_sdk = _blendle_get_sdk();
+  $client_url = $pay_sdk->clientURL();
+  $libraries['blendle.paysdk'] = [
+    'js' => [
+       $client_url => [],
+    ]
+  ];
+
+  return $libraries;
+}
+
+/**
+ * Helper function which gets the $pay_sdk from static cache.
+ *
+ * @return mixed
+ *   The Blendle SDK object or FALSE
+ */
+function _blendle_get_sdk() {
+  $pay_sdk = &drupal_static('blendle_pay_sdk');
+  if (!isset($pay_sdk)) {
+    $pay_sdk = _blendle_initialize();
+  }
+  return $pay_sdk;
+}
+
+
+/**
+ * Helper function which initializes the Blendle SDK.
+ *
+ * @return mixed
+ *   The Blendle SDK object or FALSE
+ */
+function _blendle_initialize() {
+  // - $provider_uid = your uid
+  // - $public_key = Blendle's provider specific public key
+  // - $api_secret = a secret to authenticate yourself at our API
+  // - $production = a switch to use either staging (default) or production.
+  $config = \Drupal::config('blendle.settings');
+
+  $provider_uid = $config->get('provider_uid', NULL);
+  $public_key = $config->get('public_key', NULL);
+  $api_secret = Settings::get('blendle_api_secret', NULL);
+  $production = $config->get('is_production', FALSE);
+
+  // If any of these settings are missing, we bail out.
+  if (empty($provider_uid) || empty($public_key) || empty($api_secret)) {
+    \Drupal::logger('blendle')->error('Blendle is missing some settings. Go to the <a href=!admin-page>Blendle settings page</a> to correct this.', array('!admin-page' => url('admin/config/system/blendle')));
+    return FALSE;
+  }
+
+  // Require the SDK.
+  $library = libraries_load('blendle-button');
+  if (empty($library['loaded'])) {
+    \Drupal::logger('blendle')->error('The Blendle SDK could not be loaded. Please check your installation.');
+    return FALSE;
+  }
+
+  // Initialise the SDK.
+  $pay_sdk = new \BlendleButton\Client($provider_uid, $api_secret, $public_key, array('production' => $production));
+
+  return $pay_sdk;
+}
+
+/**
+ * Helper function which generates the markup for the Blendle Pay Button.
+ *
+ * @param object $node
+ *   The node object which requires the button.
+ *
+ * @return string
+ *   Markup required to display the Blendle button.
+ */
+function _blendle_generate_button_markup($node) {
+  $url = \Drupal\Core\Url::fromUri('internal:/node/' . $node->nid->value);
+
+  $random = new Random();
+  $rnd = $random->word(32);
+
+  $markup = [
+    '#type' => 'html_tag',
+    '#tag' => 'div',
+    '#attributes' => [
+      'class' => 'pwb-item',
+      'data-purchase-callback-url' => $url->setAbsolute(TRUE)->toString() . '?rnd=' . $rnd,
+      'data-item-selector' => '#node-' . $node->nid->value,
+      'data-item-jwt' => _blendle_generate_jwt($node, $rnd),
+    ],
+    '#value' => '',
+    '#weight' => 999,
+  ];
+
+  return $markup;
+}
+
+
+/**
+ * Short-circuit the version argument.
+ */
+function _blendle_short_circuit_version() {
+  // This is needed for the libraries module, since the Blendle SDK currently
+  // doesn't have a version number.
+  return TRUE;
+}
+
+
+/**
+ * Helper function to generate jwt.
+ *
+ * @param object $node
+ *   The node object which requires the button.
+ * @param string $rnd
+ *   Random string to prevent caching.
+ *
+ * @return string
+ *   JWT string
+ */
+function _blendle_generate_jwt($node, $rnd) {
+  $url = \Drupal\Core\Url::fromUri('internal:/node/' . $node->nid->value);
+  $pay_sdk = _blendle_get_sdk();
+
+  return $pay_sdk->generateItemToken(
+    $node->nid->value,
+    array(
+      'title' => $node->title->value,
+      'description' => '',
+      'words' => $node->word_count,
+      'url' => $url->setAbsolute(TRUE)->toString() . '?rnd=' . $rnd,
+      'updated_at' => date('c', $node->getChangedTime()),
+    )
+  );
+}
+
+/**
+ * Helper function to count the words for a given node.
+ *
+ * @param object $node
+ *   The node object we want to count the words for.
+ *
+ * @return int
+ *   The amount of words for this node
+ */
+function _blendle_count_words($node) {
+  // Count the words.
+  if (Drupal::moduleHandler()->moduleExists('comment')) {
+    // We don't want to count any comments, so we turn them off before
+    // rendering.
+    $node->comment = 0;
+  }
+  $node_view = node_view($node);
+  $rendered_node = \Drupal::service('renderer')->render($node_view);
+  $stripped = strip_tags($rendered_node);
+  $word_count = str_word_count($stripped);
+  return $word_count;
+}
+
+/**
+ * Helper function to determine status on node.
+ *
+ * @param object $node
+ *   The node object we want to check.
+ *
+ * @return int
+ *   Status.
+ */
+function _blendle_get_status($node) {
+  $result = Database::getConnection()->select('blendle', 'b')
+    ->fields('b', array('status'))
+    ->condition('entity_type', $node->getType())
+    ->condition('entity_id', $node->nid->value)
+    ->execute();
+
+  $rows = $result->fetchAssoc('b');
+  if (isset($rows['status'])) {
+    return $rows['status'];
+  }
+  return 0;
+}
+
+/**
+ * Implements hook_js_alter().
+ *
+ * Ensure ID on script tag.
+ */
+function blendle_js_alter(&$javascript, \Drupal\Core\Asset\AttachedAssetsInterface $assets) {
+  $javascript['https://pay.blendle.io/client/js/client.js']['attributes']['id'] = 'pwb-loader';
+}

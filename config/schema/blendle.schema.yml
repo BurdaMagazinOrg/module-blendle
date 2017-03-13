@@ -1,0 +1,10 @@
+node_type.*.third_party.blendle:
+  type: mapping
+  label: 'Per-content type Blendle settings'
+  mapping:
+    blendle_enabled:
+      type: boolean
+      label: 'Blendle enabled'
+    blendle_default_status:
+      type: boolean
+      label: 'Blendle default state'

@@ -1,0 +1,4 @@
+blendle-admin:
+  version: 0.1
+  js:
+    js/admin.js: {}

@@ -1,0 +1,8 @@
+name: Blendle Button
+type: module
+description: Allow access to content with the Blendle Button.
+core: 8.x
+package: Blendle
+
+dependencies:
+  - libraries
