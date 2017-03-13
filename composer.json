@@ -1,0 +1,15 @@
+{
+    "name": "blendle",
+    "description": "Blendle module version modified for Freundin",
+    "type": "drupal-module",
+    "authors": [
+        {
+            "name": "Patrick C. Kannekens",
+            "email": "patrick@web-beest.nl"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "blendle/blendle-button-sdk": "dev-master"
+    }
+}
